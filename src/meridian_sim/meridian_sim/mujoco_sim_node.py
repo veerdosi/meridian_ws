@@ -4,10 +4,9 @@ import time
 import mujoco
 import numpy as np
 import rclpy
-from geometry_msgs.msg import WrenchStamped
+from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float64MultiArray, MultiArrayDimension
 from std_srvs.srv import Empty
 
@@ -109,8 +108,7 @@ class MujocoSimNode(Node):
                 self._jacobian[3:, :] = jacr[:, :6]
 
                 self._site_pos[:] = self._mjdata.site_xpos[self._ft_site_id]
-                mat = self._mjdata.site_xmat[self._ft_site_id].reshape(3, 3)
-                mujoco.mju_mat2Quat(self._site_quat, mat.flatten())
+                mujoco.mju_mat2Quat(self._site_quat, self._mjdata.site_xmat[self._ft_site_id])
 
             next_t += dt
             sleep_t = next_t - time.perf_counter()
@@ -129,6 +127,9 @@ class MujocoSimNode(Node):
             js.effort = self._joint_eff.tolist()
             force = self._ft_force.copy()
             torque = self._ft_torque.copy()
+            jac_data = self._jacobian.flatten().tolist()
+            spos = self._site_pos.copy()
+            squat = self._site_quat.copy()
         self._pub_joints.publish(js)
 
         ws = WrenchStamped()
@@ -142,8 +143,6 @@ class MujocoSimNode(Node):
         ws.wrench.torque.z = torque[2]
         self._pub_ft.publish(ws)
 
-        with self._lock:
-            jac_data = self._jacobian.flatten().tolist()
         jac_msg = Float64MultiArray()
         dim0 = MultiArrayDimension()
         dim0.label = 'cartesian'
@@ -157,12 +156,9 @@ class MujocoSimNode(Node):
         jac_msg.data = jac_data
         self._pub_jac.publish(jac_msg)
 
-        with self._lock:
-            spos = self._site_pos.copy()
-            squat = self._site_quat.copy()
         pose_msg = PoseStamped()
         pose_msg.header.stamp = now
-        pose_msg.header.frame_id = 'ft_sensor_site'
+        pose_msg.header.frame_id = 'world'
         pose_msg.pose.position.x = spos[0]
         pose_msg.pose.position.y = spos[1]
         pose_msg.pose.position.z = spos[2]
