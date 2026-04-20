@@ -63,7 +63,7 @@ class ComplianceController(Node):
         self._abort_torque = float(self.get_parameter('abort_torque_ceiling_nm').value)
         self._contact_timeout = float(self.get_parameter('contact_timeout_sec').value)
         self._kp_xy = float(self.get_parameter('kp_xy').value)
-        self._kp_z = float(self.get_parameter('kp_z').value)
+        self._kp_z = float(self.get_parameter('kp_z').value)  # reserved; Z is force-controlled
         self._target_fz = float(self.get_parameter('target_insertion_force_n').value)
         self._force_gain = float(self.get_parameter('force_gain').value)
         self._kd = float(self.get_parameter('kd_joints').value)
@@ -87,6 +87,7 @@ class ComplianceController(Node):
         # State machine
         self._state = State.APPROACH
         self._pre_contact_z_cmd = None
+        self._last_pre_contact_tick = None
         self._contact_z = None
         self._contact_time = None
         self._peak_force = 0.0
@@ -131,8 +132,9 @@ class ComplianceController(Node):
 
     def _joint_callback(self, msg: JointState) -> None:
         with self._lock:
-            self._q_current[:] = list(msg.position)[:6]
-            self._q_dot[:] = list(msg.velocity)[:6]
+            if len(msg.position) >= 6 and len(msg.velocity) >= 6:
+                self._q_current[:] = list(msg.position)[:6]
+                self._q_dot[:] = list(msg.velocity)[:6]
             self._have_joints = True
 
     def _jacobian_callback(self, msg: Float64MultiArray) -> None:
@@ -185,11 +187,12 @@ class ComplianceController(Node):
         if episode_ending:
             if state == State.FAILURE:
                 self._do_retract(q, q_dot, J_pinv, site_pos)
-            if time.time() - episode_end_time >= 1.0:
+            if episode_end_time is not None and time.time() - episode_end_time >= 1.0:
                 with self._lock:
                     self._episode_ending = False
                     self._episode_count += 1
-                if self._episode_count >= self._max_episodes:
+                    episode_count = self._episode_count
+                if episode_count >= self._max_episodes:
                     with self._lock:
                         self._all_done = True
                     self._print_summary()
@@ -241,7 +244,8 @@ class ComplianceController(Node):
         delta_q = np.clip(J_pinv @ delta_x6, -0.02, 0.02)
         self._publish_cmd(q + delta_q - self._kd * q_dot)
 
-        if abs(site_pos[2] - self._approach_height) < 0.003:
+        xy_err = np.linalg.norm(site_pos[:2] - self._target_pos[:2])
+        if abs(site_pos[2] - self._approach_height) < 0.003 and xy_err < 0.005:
             with self._lock:
                 self._state = State.PRE_CONTACT
                 self._pre_contact_z_cmd = float(site_pos[2])
@@ -249,7 +253,11 @@ class ComplianceController(Node):
             self.get_logger().info('APPROACH → PRE_CONTACT')
 
     def _do_pre_contact(self, q, q_dot, J_pinv, site_pos, fz):
-        dt = 0.005      # 200 Hz period
+        now = time.time()
+        with self._lock:
+            last = self._last_pre_contact_tick
+            self._last_pre_contact_tick = now
+        dt = (now - last) if last is not None else 0.005
         z_rate = 0.002  # 2 mm/s descent
 
         with self._lock:
@@ -307,20 +315,23 @@ class ComplianceController(Node):
         delta_x6 = np.zeros(6)
         delta_x6[:3] = goal - site_pos
         delta_q = np.clip(J_pinv @ delta_x6, -0.02, 0.02)
-        self._publish_cmd(q + delta_q)
+        self._publish_cmd(q + delta_q - self._kd * q_dot)
 
     # ─────────────────────────────────────── episode management
 
     def _end_episode(self, outcome: State, failure_mode: str, site_pos):
         with self._lock:
+            if self._episode_ending:
+                return
             ep_start = self._episode_start_time
             contact_z = self._contact_z
             peak = self._peak_force
             self._state = outcome
             self._episode_ending = True
             self._episode_end_time = time.time()
+            end_time = self._episode_end_time
 
-        duration = (time.time() - ep_start) if ep_start else 0.0
+        duration = (end_time - ep_start) if ep_start else 0.0
         insertion_dist = max(0.0, float(contact_z - site_pos[2])) if contact_z else 0.0
 
         self._episodes.append({
@@ -356,6 +367,7 @@ class ComplianceController(Node):
             self._peak_force = 0.0
             self._episode_start_time = None
             self._pre_contact_z_cmd = None
+            self._last_pre_contact_tick = None
         self.get_logger().info(f'Starting episode {self._episode_count + 1}')
 
     # ─────────────────────────────────────── publish helpers
