@@ -7,7 +7,8 @@ import rclpy
 from geometry_msgs.msg import WrenchStamped
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
+from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension
 from std_srvs.srv import Empty
 
 
@@ -42,6 +43,13 @@ class MujocoSimNode(Node):
         self._mjdata.ctrl[:6] = _NOMINAL_QPOS
         mujoco.mj_forward(self._mjmodel, self._mjdata)
 
+        self._ft_site_id = mujoco.mj_name2id(
+            self._mjmodel, mujoco.mjtObj.mjOBJ_SITE, 'ft_sensor_site'
+        )
+        if self._ft_site_id < 0:
+            self.get_logger().fatal('ft_sensor_site not found in MJCF')
+            raise RuntimeError('ft_sensor_site not found')
+
         self._lock = threading.Lock()
 
         # Shared state copied from sim thread → publish thread
@@ -50,9 +58,18 @@ class MujocoSimNode(Node):
         self._joint_eff = np.zeros(6)
         self._ft_force = np.zeros(3)
         self._ft_torque = np.zeros(3)
+        self._jacobian = np.zeros((6, 6))
+        self._site_pos = np.zeros(3)
+        self._site_quat = np.zeros(4)
 
         self._pub_joints = self.create_publisher(JointState, '/joint_states', 10)
         self._pub_ft = self.create_publisher(WrenchStamped, '/ft_sensor/raw_sim', 10)
+        self._pub_jac = self.create_publisher(
+            Float64MultiArray, '/jacobian', 10
+        )
+        self._pub_pose = self.create_publisher(
+            PoseStamped, '/ft_sensor_site_pose', 10
+        )
 
         self._sub_cmd = self.create_subscription(
             Float64MultiArray, '/joint_commands', self._cmd_callback, 10
@@ -83,6 +100,18 @@ class MujocoSimNode(Node):
                 self._ft_force[:] = self._mjdata.sensordata[0:3]
                 self._ft_torque[:] = self._mjdata.sensordata[3:6]
 
+                jacp = np.zeros((3, self._mjmodel.nv))
+                jacr = np.zeros((3, self._mjmodel.nv))
+                mujoco.mj_jacSite(
+                    self._mjmodel, self._mjdata, jacp, jacr, self._ft_site_id
+                )
+                self._jacobian[:3, :] = jacp[:, :6]
+                self._jacobian[3:, :] = jacr[:, :6]
+
+                self._site_pos[:] = self._mjdata.site_xpos[self._ft_site_id]
+                mat = self._mjdata.site_xmat[self._ft_site_id].reshape(3, 3)
+                mujoco.mju_mat2Quat(self._site_quat, mat.flatten())
+
             next_t += dt
             sleep_t = next_t - time.perf_counter()
             if sleep_t > 0:
@@ -112,6 +141,36 @@ class MujocoSimNode(Node):
         ws.wrench.torque.y = torque[1]
         ws.wrench.torque.z = torque[2]
         self._pub_ft.publish(ws)
+
+        with self._lock:
+            jac_data = self._jacobian.flatten().tolist()
+        jac_msg = Float64MultiArray()
+        dim0 = MultiArrayDimension()
+        dim0.label = 'cartesian'
+        dim0.size = 6
+        dim0.stride = 36
+        dim1 = MultiArrayDimension()
+        dim1.label = 'joints'
+        dim1.size = 6
+        dim1.stride = 6
+        jac_msg.layout.dim = [dim0, dim1]
+        jac_msg.data = jac_data
+        self._pub_jac.publish(jac_msg)
+
+        with self._lock:
+            spos = self._site_pos.copy()
+            squat = self._site_quat.copy()
+        pose_msg = PoseStamped()
+        pose_msg.header.stamp = now
+        pose_msg.header.frame_id = 'ft_sensor_site'
+        pose_msg.pose.position.x = spos[0]
+        pose_msg.pose.position.y = spos[1]
+        pose_msg.pose.position.z = spos[2]
+        pose_msg.pose.orientation.w = squat[0]
+        pose_msg.pose.orientation.x = squat[1]
+        pose_msg.pose.orientation.y = squat[2]
+        pose_msg.pose.orientation.z = squat[3]
+        self._pub_pose.publish(pose_msg)
 
     def _cmd_callback(self, msg: Float64MultiArray) -> None:
         if len(msg.data) != 6:
