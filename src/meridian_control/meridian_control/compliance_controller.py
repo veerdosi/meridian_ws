@@ -261,6 +261,8 @@ class ComplianceController(Node):
         z_rate = 0.002  # 2 mm/s descent
 
         with self._lock:
+            if self._pre_contact_z_cmd is None:
+                self._pre_contact_z_cmd = float(site_pos[2])
             self._pre_contact_z_cmd -= z_rate * dt
             target_z = self._pre_contact_z_cmd
 
