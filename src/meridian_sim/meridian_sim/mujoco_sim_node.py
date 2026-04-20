@@ -2,6 +2,7 @@ import threading
 import time
 
 import mujoco
+import mujoco.viewer
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, WrenchStamped
@@ -33,10 +34,12 @@ class MujocoSimNode(Node):
         super().__init__('mujoco_sim_node')
 
         self.declare_parameter('mjcf_path', '')
+        self.declare_parameter('enable_viewer', False)
         mjcf_path = self.get_parameter('mjcf_path').value
         if not mjcf_path:
             self.get_logger().fatal('mjcf_path param is required')
             raise RuntimeError('mjcf_path param is required')
+        self._enable_viewer = self.get_parameter('enable_viewer').value
 
         self._mjmodel = mujoco.MjModel.from_xml_path(mjcf_path)
         self._mjdata = mujoco.MjData(self._mjmodel)
@@ -88,7 +91,21 @@ class MujocoSimNode(Node):
         self._running = True
         self._sim_thread = threading.Thread(target=self._sim_loop, daemon=True)
         self._sim_thread.start()
+
+        self._viewer = None
+        if self._enable_viewer:
+            self._viewer = mujoco.viewer.launch_passive(self._mjmodel, self._mjdata)
+            self._viewer_thread = threading.Thread(target=self._viewer_loop, daemon=True)
+            self._viewer_thread.start()
+            self.get_logger().info('MuJoCo passive viewer opened')
+
         self.get_logger().info(f'MuJoCo sim started: {mjcf_path}')
+
+    def _viewer_loop(self) -> None:
+        while self._running and self._viewer.is_running():
+            with self._lock:
+                self._viewer.sync()
+            time.sleep(0.033)  # ~30 Hz refresh
 
     def _sim_loop(self) -> None:
         dt = self._mjmodel.opt.timestep  # honours whatever XML sets
@@ -221,6 +238,8 @@ class MujocoSimNode(Node):
     def destroy_node(self) -> None:
         self._running = False
         self._sim_thread.join(timeout=2.0)
+        if self._viewer is not None:
+            self._viewer.close()
         super().destroy_node()
 
 

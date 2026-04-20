@@ -1,10 +1,18 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    enable_viewer_arg = DeclareLaunchArgument(
+        'enable_viewer', default_value='false',
+        description='Open the MuJoCo passive viewer on DISPLAY :99 (VNC)',
+    )
+    enable_viewer = LaunchConfiguration('enable_viewer')
+
     try:
         desc_share = get_package_share_directory('meridian_description')
         mjcf_path = os.path.join(desc_share, 'assets', 'ur5e.xml')
@@ -27,8 +35,9 @@ def generate_launch_description():
         package='meridian_sim',
         executable='mujoco_sim_node',
         name='mujoco_sim_node',
-        parameters=[{'mjcf_path': mjcf_path}],
+        parameters=[{'mjcf_path': mjcf_path, 'enable_viewer': enable_viewer}],
         output='screen',
+        additional_env={'DISPLAY': ':99'},
     )
 
     ft_sensor_node = Node(
@@ -53,4 +62,9 @@ def generate_launch_description():
         output='screen',
     )
 
-    return LaunchDescription([mujoco_sim_node, ft_sensor_node, compliance_controller])
+    return LaunchDescription([
+        enable_viewer_arg,
+        mujoco_sim_node,
+        ft_sensor_node,
+        compliance_controller,
+    ])
