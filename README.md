@@ -20,9 +20,10 @@ meridian_ws/
     │   │   └── ur5e.xml              # augmented MJCF (F/T sensor, fingertip, table, USB-C target, actuators)
     │   ├── CMakeLists.txt
     │   └── package.xml
-    ├── meridian_control/              # custom message types (ament_cmake)
+    ├── meridian_control/              # custom messages + compliance controller (ament_cmake)
     │   ├── meridian_control/
-    │   │   └── __init__.py
+    │   │   ├── __init__.py
+    │   │   └── compliance_controller.py   # 5-state force-compliant insertion controller
     │   ├── msg/
     │   │   ├── ExecutionOutcome.msg
     │   │   └── ComplianceState.msg
@@ -277,4 +278,76 @@ The MuJoCo passive viewer opens on the VNC display for 5 seconds.
 - [x] Step 6 — Custom messages (`ExecutionOutcome`, `ComplianceState` in `meridian_control`)
 - [x] Step 7 — F/T sensor ROS 2 node (`ft_sensor_node` — noise, Butterworth LPF, 1 kHz)
 - [x] Step 8 — MuJoCo sim node (`mujoco_sim_node` — 1 kHz sim thread, joint states, F/T, reset service)
-- [ ] Step 9 — Compliance controller (`meridian_control`)
+- [x] Step 9 — Compliance controller (`compliance_controller` — 5-state machine, Jacobian IK, 7/10 SEATED in 10-episode batch)
+
+---
+
+## Step 9 — Compliance Controller
+
+### Overview
+
+`compliance_controller` implements a force-compliant insertion state machine for the USB-C peg-in-hole task. It drives the UR5e fingertip from above the target, detects contact, and uses impedance control to seat the peg within force and displacement bounds.
+
+### State Machine
+
+```
+IDLE → APPROACH → PRE_CONTACT → CONTACT_ACTIVE → SEATED / FAILURE → RETRACT → IDLE
+```
+
+| State | Action |
+|-------|--------|
+| `IDLE` | Waits for first sensor message, then transitions to APPROACH |
+| `APPROACH` | Jacobian IK drives fingertip to `target_position` + `approach_height` |
+| `PRE_CONTACT` | Descends at 10 mm/s; detects contact when `|fz| > contact_threshold_n` |
+| `CONTACT_ACTIVE` | Impedance loop: XY position error → joint delta via Jacobian; Z force-controlled toward `target_insertion_force_n` |
+| `SEATED` | Declared when `seating_force_min_n ≤ peak_fz ≤ seating_force_max_n` and `displacement ≥ seating_displacement_m` |
+| `RETRACT` | Jacobian IK lifts fingertip back to approach height; calls `~/reset` for next episode |
+
+Abort conditions checked in every state: `|fz| > abort_force_ceiling_n` or any torque component `> abort_torque_ceiling_nm`.
+
+### Running
+
+```bash
+source ~/meridian_ws/install/setup.bash
+ros2 launch meridian_sim sim_sensors.launch.py
+```
+
+The launch file starts `mujoco_sim_node`, `ft_sensor_node`, and `compliance_controller` together.
+
+### Parameters (`compliance_params.yaml`)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `target_position` | `[0.4, 0.0, 0.01]` | XYZ of the USB-C target (m) |
+| `approach_height` | `0.15` | Z height to hover above target (m) |
+| `contact_threshold_n` | `5.0` | Fz threshold to enter CONTACT_ACTIVE (N) |
+| `seating_force_min_n` | `1.0` | Min Fz to declare SEATED (N) |
+| `seating_force_max_n` | `20.0` | Max Fz before abort (N) |
+| `seating_displacement_m` | `0.001` | Min Z displacement to declare SEATED (m) |
+| `abort_force_ceiling_n` | `50.0` | \|Fz\| abort threshold (N) |
+| `abort_torque_ceiling_nm` | `30.0` | Max torque component abort threshold (Nm) |
+| `contact_timeout_sec` | `30.0` | Timeout in CONTACT_ACTIVE before FAILURE (s) |
+| `kp_xy` | `50.0` | XY position gain for impedance control |
+| `target_insertion_force_n` | `5.0` | Target Fz during insertion (N) |
+| `force_gain` | `0.0001` | Z force error → Z velocity gain |
+| `max_episodes` | `10` | Number of insertion attempts per batch |
+
+### Topics and Services
+
+| Topic / Service | Type | Direction | Description |
+|-----------------|------|-----------|-------------|
+| `/ft_sensor/filtered` | `WrenchStamped` | sub | Filtered F/T from `ft_sensor_node` |
+| `/ft_sensor_site_pose` | `PoseStamped` | sub | Fingertip pose from `mujoco_sim_node` |
+| `/jacobian` | `Float64MultiArray` | sub | 6×6 Jacobian from `mujoco_sim_node` |
+| `/joint_states` | `JointState` | sub | Joint positions/velocities |
+| `/joint_commands` | `Float64MultiArray` | pub | 6-DOF position commands |
+| `/compliance_controller/state` | `ComplianceState` | pub | Current state + Fz + displacement |
+| `/execution_outcome` | `ExecutionOutcome` | pub | Per-episode result (SEATED / FAILURE) |
+| `mujoco_sim_node/reset` | `std_srvs/Empty` | client | Resets sim to randomised near-target pose |
+
+### Sim Tuning Notes
+
+- **Gravity disabled** (`<option gravity="0 0 0"/>` in `ur5e.xml`): pure-P actuators without gravity allows stable hovering; reactive contact forces are still physical.
+- **Velocity damping added** to all actuators (`kv="50"` shoulder/elbow, `kv="20"` wrists): prevents oscillation during fast Jacobian IK motions.
+- **Jacobian IK direction preservation**: joint deltas are scaled by `_scale_dq()` (uniform scaling) rather than per-element clip, which would distort the intended Cartesian direction.
+- **Abort uses `|fz|` only**: MuJoCo's FT sensor includes structural constraint forces; large lateral forces from arm dynamics are filtered out by checking only the Z axis for abort.

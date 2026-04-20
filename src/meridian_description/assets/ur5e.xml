@@ -1,5 +1,6 @@
 <mujoco model="ur5e">
   <compiler angle="radian" />
+  <option gravity="0 0 0" />
   <asset>
     <mesh name="base"     content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/base.stl" />
     <mesh name="shoulder" content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/shoulder.stl" />
@@ -60,11 +61,11 @@
     <torque name="ft_torque" site="ft_sensor_site" />
   </sensor>
   <actuator>
-    <position name="shoulder_pan_act"  joint="shoulder_pan_joint"  kp="500" forcerange="-150 150" />
-    <position name="shoulder_lift_act" joint="shoulder_lift_joint" kp="500" forcerange="-150 150" />
-    <position name="elbow_act"         joint="elbow_joint"         kp="500" forcerange="-150 150" />
-    <position name="wrist_1_act"       joint="wrist_1_joint"       kp="200" forcerange="-28 28"  />
-    <position name="wrist_2_act"       joint="wrist_2_joint"       kp="200" forcerange="-28 28"  />
-    <position name="wrist_3_act"       joint="wrist_3_joint"       kp="200" forcerange="-28 28"  />
+    <position name="shoulder_pan_act"  joint="shoulder_pan_joint"  kp="500" kv="50" forcerange="-150 150" />
+    <position name="shoulder_lift_act" joint="shoulder_lift_joint" kp="500" kv="50" forcerange="-150 150" />
+    <position name="elbow_act"         joint="elbow_joint"         kp="500" kv="50" forcerange="-150 150" />
+    <position name="wrist_1_act"       joint="wrist_1_joint"       kp="200" kv="20" forcerange="-28 28"  />
+    <position name="wrist_2_act"       joint="wrist_2_joint"       kp="200" kv="20" forcerange="-28 28"  />
+    <position name="wrist_3_act"       joint="wrist_3_joint"       kp="200" kv="20" forcerange="-28 28"  />
   </actuator>
 </mujoco>

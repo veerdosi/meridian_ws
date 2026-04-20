@@ -156,12 +156,18 @@ class ComplianceController(Node):
         lam = 0.01
         return J.T @ np.linalg.inv(J @ J.T + lam * np.eye(J.shape[0]))
 
+    @staticmethod
+    def _scale_dq(dq: np.ndarray, max_dq: float = 0.02) -> np.ndarray:
+        """Scale joint delta so the largest component is ≤ max_dq, preserving direction."""
+        peak = np.max(np.abs(dq))
+        if peak > max_dq:
+            return dq * (max_dq / peak)
+        return dq
+
     # -------------------------------------------------------------- main loop
 
     def _ft_callback(self, msg: WrenchStamped) -> None:
         fz = msg.wrench.force.z
-        fx = msg.wrench.force.x
-        fy = msg.wrench.force.y
         tx = msg.wrench.torque.x
         ty = msg.wrench.torque.y
         tz = msg.wrench.torque.z
@@ -203,11 +209,10 @@ class ComplianceController(Node):
 
         # ── abort checks (CONTACT_ACTIVE only) ──────────────────────────────
         if state == State.CONTACT_ACTIVE:
-            total_force = float(np.sqrt(fx**2 + fy**2 + fz**2))
             total_torque = float(np.sqrt(tx**2 + ty**2 + tz**2))
             with self._lock:
                 self._peak_force = max(self._peak_force, abs(fz))
-            if total_force > self._abort_force:
+            if abs(fz) > self._abort_force:
                 self._end_episode(State.FAILURE, 'over_force', site_pos)
                 return
             if total_torque > self._abort_torque:
@@ -241,7 +246,7 @@ class ComplianceController(Node):
         ])
         delta_x6 = np.zeros(6)
         delta_x6[:3] = goal - site_pos
-        delta_q = np.clip(J_pinv @ delta_x6, -0.02, 0.02)
+        delta_q = self._scale_dq(J_pinv @ delta_x6)
         self._publish_cmd(q + delta_q - self._kd * q_dot)
 
         xy_err = np.linalg.norm(site_pos[:2] - self._target_pos[:2])
@@ -258,7 +263,7 @@ class ComplianceController(Node):
             last = self._last_pre_contact_tick
             self._last_pre_contact_tick = now
         dt = (now - last) if last is not None else 0.005
-        z_rate = 0.002  # 2 mm/s descent
+        z_rate = 0.010  # 10 mm/s descent
 
         with self._lock:
             if self._pre_contact_z_cmd is None:
@@ -270,8 +275,14 @@ class ComplianceController(Node):
         delta_x6[0] = self._target_pos[0] - site_pos[0]
         delta_x6[1] = self._target_pos[1] - site_pos[1]
         delta_x6[2] = target_z - site_pos[2]
-        delta_q = np.clip(J_pinv @ delta_x6, -0.02, 0.02)
+        delta_q = self._scale_dq(J_pinv @ delta_x6)
         self._publish_cmd(q + delta_q - self._kd * q_dot)
+
+        # Skip contact detection during the first 0.5 s — let arm settle
+        with self._lock:
+            ep_start = self._episode_start_time
+        if ep_start is None or (time.time() - ep_start) < 0.5:
+            return
 
         if abs(fz) > self._contact_thresh:
             with self._lock:
@@ -295,7 +306,7 @@ class ComplianceController(Node):
         delta_z6[2] = delta_z_m
         delta_q_z = J_pinv @ delta_z6
 
-        delta_q = np.clip(delta_q_xy + delta_q_z, -0.02, 0.02)
+        delta_q = self._scale_dq(delta_q_xy + delta_q_z)
         self._publish_cmd(q + delta_q - self._kd * q_dot)
 
         with self._lock:
@@ -316,7 +327,7 @@ class ComplianceController(Node):
         ])
         delta_x6 = np.zeros(6)
         delta_x6[:3] = goal - site_pos
-        delta_q = np.clip(J_pinv @ delta_x6, -0.02, 0.02)
+        delta_q = self._scale_dq(J_pinv @ delta_x6)
         self._publish_cmd(q + delta_q - self._kd * q_dot)
 
     # ─────────────────────────────────────── episode management
@@ -356,6 +367,7 @@ class ComplianceController(Node):
         self.get_logger().info(
             f'Episode {self._episode_count + 1} → {outcome.value} '
             f'peak={peak:.2f}N dist={insertion_dist:.4f}m dur={duration:.2f}s'
+            + (f' reason={failure_mode}' if failure_mode else '')
         )
 
         if self._reset_between and self._reset_client.service_is_ready():

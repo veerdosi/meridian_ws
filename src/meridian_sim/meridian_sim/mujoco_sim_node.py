@@ -20,8 +20,12 @@ JOINT_NAMES = [
     'wrist_3_joint',
 ]
 
-# Nominal config: arm positioned above the USB-C target at [0.4, 0, 0]
-_NOMINAL_QPOS = np.array([0.0, -1.9, 1.7, -1.4, -1.57, 0.0], dtype=np.float64)
+# Nominal config: IK solution placing ft_sensor_site at (0.4, 0.0, 0.15) —
+# 15 cm directly above the USB-C target so APPROACH converges immediately.
+_NOMINAL_QPOS = np.array([-0.2828, -0.7106, 1.5283, -0.3307, -1.6902, 0.0], dtype=np.float64)
+
+# Approach height used by both the reset callback and the compliance controller.
+_APPROACH_HEIGHT = 0.15
 
 
 class MujocoSimNode(Node):
@@ -200,6 +204,7 @@ class MujocoSimNode(Node):
                 0.0,
             ])
             desired_pos = target_pos + xy_offset
+            desired_pos[2] = _APPROACH_HEIGHT  # reset to above-table hover, not to table surface
 
             jacp = np.zeros((3, self._mjmodel.nv))
             mujoco.mj_jacBody(self._mjmodel, self._mjdata, jacp, None, fingertip_id)
