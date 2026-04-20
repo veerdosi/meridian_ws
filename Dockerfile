@@ -22,7 +22,12 @@ RUN apt-get update && apt-get install -y \
     openbox \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get install -y ros-jazzy-foxglove-bridge \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN python3 -m pip install mujoco scipy numpy --break-system-packages
+
+RUN python3 -m pip install anthropic matplotlib --break-system-packages
 
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
 
@@ -31,6 +36,8 @@ RUN mkdir -p /root/.vnc && x11vnc -storepasswd meridian /root/.vnc/passwd
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+EXPOSE 8765
 
 WORKDIR /root/meridian_ws
 ENTRYPOINT ["/entrypoint.sh"]
