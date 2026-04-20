@@ -1,0 +1,4 @@
+string state
+string active_profile_id
+float64 fz_filtered
+float64 insertion_distance

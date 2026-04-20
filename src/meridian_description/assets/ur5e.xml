@@ -1,0 +1,70 @@
+<mujoco model="ur5e">
+  <compiler angle="radian" />
+  <asset>
+    <mesh name="base"     content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/base.stl" />
+    <mesh name="shoulder" content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/shoulder.stl" />
+    <mesh name="upperarm" content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/upperarm.stl" />
+    <mesh name="forearm"  content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/forearm.stl" />
+    <mesh name="wrist1"   content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/wrist1.stl" />
+    <mesh name="wrist2"   content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/wrist2.stl" />
+    <mesh name="wrist3"   content_type="model/stl" file="/opt/ros/jazzy/share/ur_description/meshes/ur5e/collision/wrist3.stl" />
+  </asset>
+  <worldbody>
+    <!-- base mesh: visual only, no collision -->
+    <geom pos="0 0 0" quat="-1 0 0 0" type="mesh" mesh="base" contype="0" conaffinity="0" />
+    <body name="shoulder_link" pos="0 0 0.1625" quat="0 0 0 1">
+      <inertial pos="0 -0.00193 -0.02561" quat="0.560239 0.250606 -0.316559 0.72327" mass="3.761" diaginertia="0.00703079 0.0070003 0.00602478" />
+      <joint name="shoulder_pan_joint" pos="0 0 0" axis="0 0 1" range="-6.28319 6.28319" actuatorfrcrange="-150 150" />
+      <geom quat="0 0 0 1" type="mesh" mesh="shoulder" contype="0" conaffinity="0" />
+      <body name="upper_arm_link" quat="0.707107 0.707107 0 0">
+        <inertial pos="-0.2125 0 0.11336" quat="0.500275 0.499641 0.500368 0.499716" mass="8.058" diaginertia="0.333881 0.332472 0.0150588" />
+        <joint name="shoulder_lift_joint" pos="0 0 0" axis="0 0 1" range="-6.28319 6.28319" actuatorfrcrange="-150 150" />
+        <geom pos="0 0 0.138" quat="0.5 0.5 -0.5 -0.5" type="mesh" mesh="upperarm" contype="0" conaffinity="0" />
+        <body name="forearm_link" pos="-0.425 0 0">
+          <inertial pos="-0.2422 0 0.0265" quat="0.501301 0.498381 0.510711 0.489375" mass="2.846" diaginertia="0.0787927 0.0785102 0.00397103" />
+          <joint name="elbow_joint" pos="0 0 0" axis="0 0 1" range="-3.14159 3.14159" actuatorfrcrange="-150 150" />
+          <geom pos="0 0 0.007" quat="0.5 0.5 -0.5 -0.5" type="mesh" mesh="forearm" contype="0" conaffinity="0" />
+          <body name="wrist_1_link" pos="-0.3922 0 0.1333">
+            <inertial pos="0 -0.01634 -0.0018" quat="0.960609 0.277707 0.00515042 -0.00913626" mass="1.37" diaginertia="0.00165502 0.00142363 0.00119868" />
+            <joint name="wrist_1_joint" pos="0 0 0" axis="0 0 1" range="-6.28319 6.28319" actuatorfrcrange="-28 28" />
+            <geom pos="0 0 -0.127" quat="0.707107 0.707107 0 0" type="mesh" mesh="wrist1" contype="0" conaffinity="0" />
+            <body name="wrist_2_link" pos="0 -0.0997 -2.04488e-11" quat="0.707107 0.707107 0 0">
+              <inertial pos="0 0.01634 -0.0018" quat="0.996652 -0.0779336 -0.00684629 -0.0237381" mass="1.3" diaginertia="0.00135637 0.00128607 0.00095814" />
+              <joint name="wrist_2_joint" pos="0 0 0" axis="0 0 1" range="-6.28319 6.28319" actuatorfrcrange="-28 28" />
+              <geom pos="0 0 -0.0997" quat="1 0 0 0" type="mesh" mesh="wrist2" contype="0" conaffinity="0" />
+              <body name="wrist_3_link" pos="0 0.0996 -2.04283e-11" quat="0.707107 -0.707107 0 0">
+                <inertial pos="0 0 -0.001159" quat="0.0048234 0.706235 -0.0143444 0.707816" mass="0.365" diaginertia="0.000257573 0.000189069 0.000186938" />
+                <joint name="wrist_3_joint" pos="0 0 0" axis="0 0 1" range="-6.28319 6.28319" actuatorfrcrange="-28 28" />
+                <geom pos="0 0 -0.0989" quat="0.707107 0.707107 0 0" type="mesh" mesh="wrist3" contype="0" conaffinity="0" />
+                <site name="ft_sensor_site" pos="0 0 0.0823" size="0.01" type="sphere" rgba="1 0 0 0.5" />
+                <body name="fingertip" pos="0 0 0.0823">
+                  <!-- fingertip collides with table/target (contype=1,conaffinity=1 by default) -->
+                  <geom name="fingertip_geom" type="cylinder" size="0.01 0.01" rgba="0.8 0.8 0.8 1" />
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="table" pos="0 0 0">
+      <geom name="table_surface" type="box" size="0.5 0.5 0.02" pos="0 0 -0.02" rgba="0.7 0.6 0.5 1" contype="1" conaffinity="1" />
+    </body>
+    <body name="usbc_target" pos="0.4 0.0 0.0">
+      <geom name="usbc_geom" type="box" size="0.0075 0.0035 0.005" rgba="0.1 0.1 0.8 1" />
+      <site name="target_site" pos="0 0 0" size="0.005" rgba="0 1 0 0.8" />
+    </body>
+  </worldbody>
+  <sensor>
+    <force name="ft_force" site="ft_sensor_site" />
+    <torque name="ft_torque" site="ft_sensor_site" />
+  </sensor>
+  <actuator>
+    <position name="shoulder_pan_act"  joint="shoulder_pan_joint"  kp="500" forcerange="-150 150" />
+    <position name="shoulder_lift_act" joint="shoulder_lift_joint" kp="500" forcerange="-150 150" />
+    <position name="elbow_act"         joint="elbow_joint"         kp="500" forcerange="-150 150" />
+    <position name="wrist_1_act"       joint="wrist_1_joint"       kp="200" forcerange="-28 28"  />
+    <position name="wrist_2_act"       joint="wrist_2_joint"       kp="200" forcerange="-28 28"  />
+    <position name="wrist_3_act"       joint="wrist_3_joint"       kp="200" forcerange="-28 28"  />
+  </actuator>
+</mujoco>

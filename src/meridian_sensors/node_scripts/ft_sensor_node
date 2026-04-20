@@ -1,0 +1,3 @@
+#!/usr/bin/env python3
+from meridian_sensors.ft_sensor_node import main
+main()
