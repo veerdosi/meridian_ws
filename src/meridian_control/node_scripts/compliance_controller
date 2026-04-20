@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+import sys
+from meridian_control.compliance_controller import main
+sys.exit(main())

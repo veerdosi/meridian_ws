@@ -1,0 +1,25 @@
+compliance_controller:
+  ros__parameters:
+    # Geometry
+    target_position: [0.4, 0.0, 0.01]
+    approach_height: 0.15
+
+    # State machine thresholds
+    contact_threshold_n: 5.0
+    seating_force_min_n: 1.0
+    seating_force_max_n: 20.0
+    seating_displacement_m: 0.001
+    abort_force_ceiling_n: 50.0
+    abort_torque_ceiling_nm: 30.0
+    contact_timeout_sec: 30.0
+
+    # Impedance gains
+    kp_xy: 50.0
+    kp_z: 0.0
+    target_insertion_force_n: 5.0
+    force_gain: 0.0001
+    kd_joints: 0.1
+
+    # Episode
+    max_episodes: 10
+    reset_between_episodes: true

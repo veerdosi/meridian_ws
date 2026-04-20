@@ -5,8 +5,6 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # Resolve the MJCF path relative to meridian_description's install share
-    # Falls back to the source tree if the package hasn't been installed yet.
     try:
         desc_share = get_package_share_directory('meridian_description')
         mjcf_path = os.path.join(desc_share, 'assets', 'ur5e.xml')
@@ -15,6 +13,14 @@ def generate_launch_description():
             os.path.dirname(__file__),
             '..', '..', '..', '..', 'src',
             'meridian_description', 'assets', 'ur5e.xml',
+        )
+
+    try:
+        sim_share = get_package_share_directory('meridian_sim')
+        params_yaml = os.path.join(sim_share, 'config', 'compliance_params.yaml')
+    except Exception:
+        params_yaml = os.path.join(
+            os.path.dirname(__file__), '..', 'config', 'compliance_params.yaml'
         )
 
     mujoco_sim_node = Node(
@@ -39,4 +45,12 @@ def generate_launch_description():
         output='screen',
     )
 
-    return LaunchDescription([mujoco_sim_node, ft_sensor_node])
+    compliance_controller = Node(
+        package='meridian_control',
+        executable='compliance_controller',
+        name='compliance_controller',
+        parameters=[params_yaml],
+        output='screen',
+    )
+
+    return LaunchDescription([mujoco_sim_node, ft_sensor_node, compliance_controller])

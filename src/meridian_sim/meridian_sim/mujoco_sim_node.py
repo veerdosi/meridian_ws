@@ -4,10 +4,10 @@ import time
 import mujoco
 import numpy as np
 import rclpy
-from geometry_msgs.msg import WrenchStamped
+from geometry_msgs.msg import PoseStamped, WrenchStamped
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension
 from std_srvs.srv import Empty
 
 
@@ -20,8 +20,12 @@ JOINT_NAMES = [
     'wrist_3_joint',
 ]
 
-# Nominal config: arm positioned above the USB-C target at [0.4, 0, 0]
-_NOMINAL_QPOS = np.array([0.0, -1.9, 1.7, -1.4, -1.57, 0.0], dtype=np.float64)
+# Nominal config: IK solution placing ft_sensor_site at (0.4, 0.0, 0.15) —
+# 15 cm directly above the USB-C target so APPROACH converges immediately.
+_NOMINAL_QPOS = np.array([-0.2828, -0.7106, 1.5283, -0.3307, -1.6902, 0.0], dtype=np.float64)
+
+# Approach height used by both the reset callback and the compliance controller.
+_APPROACH_HEIGHT = 0.15
 
 
 class MujocoSimNode(Node):
@@ -42,6 +46,13 @@ class MujocoSimNode(Node):
         self._mjdata.ctrl[:6] = _NOMINAL_QPOS
         mujoco.mj_forward(self._mjmodel, self._mjdata)
 
+        self._ft_site_id = mujoco.mj_name2id(
+            self._mjmodel, mujoco.mjtObj.mjOBJ_SITE, 'ft_sensor_site'
+        )
+        if self._ft_site_id < 0:
+            self.get_logger().fatal('ft_sensor_site not found in MJCF')
+            raise RuntimeError('ft_sensor_site not found')
+
         self._lock = threading.Lock()
 
         # Shared state copied from sim thread → publish thread
@@ -50,9 +61,18 @@ class MujocoSimNode(Node):
         self._joint_eff = np.zeros(6)
         self._ft_force = np.zeros(3)
         self._ft_torque = np.zeros(3)
+        self._jacobian = np.zeros((6, 6))
+        self._site_pos = np.zeros(3)
+        self._site_quat = np.zeros(4)
 
         self._pub_joints = self.create_publisher(JointState, '/joint_states', 10)
         self._pub_ft = self.create_publisher(WrenchStamped, '/ft_sensor/raw_sim', 10)
+        self._pub_jac = self.create_publisher(
+            Float64MultiArray, '/jacobian', 10
+        )
+        self._pub_pose = self.create_publisher(
+            PoseStamped, '/ft_sensor_site_pose', 10
+        )
 
         self._sub_cmd = self.create_subscription(
             Float64MultiArray, '/joint_commands', self._cmd_callback, 10
@@ -83,6 +103,17 @@ class MujocoSimNode(Node):
                 self._ft_force[:] = self._mjdata.sensordata[0:3]
                 self._ft_torque[:] = self._mjdata.sensordata[3:6]
 
+                jacp = np.zeros((3, self._mjmodel.nv))
+                jacr = np.zeros((3, self._mjmodel.nv))
+                mujoco.mj_jacSite(
+                    self._mjmodel, self._mjdata, jacp, jacr, self._ft_site_id
+                )
+                self._jacobian[:3, :] = jacp[:, :6]
+                self._jacobian[3:, :] = jacr[:, :6]
+
+                self._site_pos[:] = self._mjdata.site_xpos[self._ft_site_id]
+                mujoco.mju_mat2Quat(self._site_quat, self._mjdata.site_xmat[self._ft_site_id])
+
             next_t += dt
             sleep_t = next_t - time.perf_counter()
             if sleep_t > 0:
@@ -100,6 +131,9 @@ class MujocoSimNode(Node):
             js.effort = self._joint_eff.tolist()
             force = self._ft_force.copy()
             torque = self._ft_torque.copy()
+            jac_data = self._jacobian.flatten().tolist()
+            spos = self._site_pos.copy()
+            squat = self._site_quat.copy()
         self._pub_joints.publish(js)
 
         ws = WrenchStamped()
@@ -112,6 +146,31 @@ class MujocoSimNode(Node):
         ws.wrench.torque.y = torque[1]
         ws.wrench.torque.z = torque[2]
         self._pub_ft.publish(ws)
+
+        jac_msg = Float64MultiArray()
+        dim0 = MultiArrayDimension()
+        dim0.label = 'cartesian'
+        dim0.size = 6
+        dim0.stride = 36
+        dim1 = MultiArrayDimension()
+        dim1.label = 'joints'
+        dim1.size = 6
+        dim1.stride = 6
+        jac_msg.layout.dim = [dim0, dim1]
+        jac_msg.data = jac_data
+        self._pub_jac.publish(jac_msg)
+
+        pose_msg = PoseStamped()
+        pose_msg.header.stamp = now
+        pose_msg.header.frame_id = 'world'
+        pose_msg.pose.position.x = spos[0]
+        pose_msg.pose.position.y = spos[1]
+        pose_msg.pose.position.z = spos[2]
+        pose_msg.pose.orientation.w = squat[0]
+        pose_msg.pose.orientation.x = squat[1]
+        pose_msg.pose.orientation.y = squat[2]
+        pose_msg.pose.orientation.z = squat[3]
+        self._pub_pose.publish(pose_msg)
 
     def _cmd_callback(self, msg: Float64MultiArray) -> None:
         if len(msg.data) != 6:
@@ -145,6 +204,7 @@ class MujocoSimNode(Node):
                 0.0,
             ])
             desired_pos = target_pos + xy_offset
+            desired_pos[2] = _APPROACH_HEIGHT  # reset to above-table hover, not to table surface
 
             jacp = np.zeros((3, self._mjmodel.nv))
             mujoco.mj_jacBody(self._mjmodel, self._mjdata, jacp, None, fingertip_id)
