@@ -63,6 +63,7 @@ class ComplianceController(Node):
         self._abort_torque = float(self.get_parameter('abort_torque_ceiling_nm').value)
         self._contact_timeout = float(self.get_parameter('contact_timeout_sec').value)
         self._kp_xy = float(self.get_parameter('kp_xy').value)
+        self._kp_z = float(self.get_parameter('kp_z').value)
         self._target_fz = float(self.get_parameter('target_insertion_force_n').value)
         self._force_gain = float(self.get_parameter('force_gain').value)
         self._kd = float(self.get_parameter('kd_joints').value)
