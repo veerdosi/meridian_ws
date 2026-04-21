@@ -37,18 +37,25 @@ meridian_ws/
     │   │   └── ft_sensor_node         # libexec wrapper
     │   ├── setup.py
     │   └── package.xml
-    └── meridian_sim/                  # MuJoCo sim node + launch (ament_python)
-        ├── meridian_sim/
-        │   ├── __init__.py
-        │   └── mujoco_sim_node.py
-        ├── node_scripts/
-        │   └── mujoco_sim_node        # libexec wrapper
-        ├── launch/
-        │   └── sim_sensors.launch.py
+    ├── meridian_sim/                  # MuJoCo sim node + launch (ament_python)
+    │   ├── meridian_sim/
+    │   │   ├── __init__.py
+    │   │   └── mujoco_sim_node.py
+    │   ├── node_scripts/
+    │   │   └── mujoco_sim_node        # libexec wrapper
+    │   ├── launch/
+    │   │   └── sim_sensors.launch.py
+    │   ├── scripts/
+    │   │   ├── convert_urdf_to_mjcf.py
+    │   │   ├── augment_mjcf.py
+    │   │   └── test_mjcf.py
+    │   ├── setup.py
+    │   └── package.xml
+    └── meridian_annotation/           # VLM annotation pipeline (ament_python)
+        ├── meridian_annotation/
+        │   └── __init__.py
         ├── scripts/
-        │   ├── convert_urdf_to_mjcf.py
-        │   ├── augment_mjcf.py
-        │   └── test_mjcf.py
+        │   └── annotate_episode.py   # reads bag, renders Fz trace, calls VLM
         ├── setup.py
         └── package.xml
 ```
@@ -69,6 +76,7 @@ docker build -t meridian:latest /Users/veerdosi/Documents/code/github/meridian_w
 docker run -it --name meridian_dev --platform linux/arm64 \
   -v /Users/veerdosi/Documents/code/github/meridian_ws:/root/meridian_ws \
   -p 5900:5900 \
+  -p 8765:8765 \
   -e LIBGL_ALWAYS_SOFTWARE=1 \
   meridian:latest
 ```
@@ -126,6 +134,127 @@ ros2 launch meridian_sim sim_sensors.launch.py
 Starts two nodes:
 - `mujoco_sim_node` — MuJoCo sim at 1 kHz, publishes joint states + raw F/T
 - `ft_sensor_node` — reads raw_sim, adds Gaussian noise, applies Butterworth LPF, republishes
+
+---
+
+## Demo Playbook
+
+Exact commands in order — reproducible in under 2 minutes.
+
+### 1. Start container
+
+```bash
+docker rm meridian_dev 2>/dev/null || true
+docker run -it --name meridian_dev --platform linux/arm64 \
+  -v /Users/veerdosi/Documents/code/github/meridian_ws:/root/meridian_ws \
+  -p 5900:5900 \
+  -p 8765:8765 \
+  -e LIBGL_ALWAYS_SOFTWARE=1 \
+  meridian:latest
+```
+
+### 2. Build workspace (first time or after changes)
+
+Inside container:
+```bash
+cd ~/meridian_ws && bash run_setup.sh
+```
+
+### 3. Launch full stack in demo mode
+
+Inside container:
+```bash
+source ~/meridian_ws/install/setup.bash
+ros2 launch meridian_sim sim_sensors.launch.py demo_mode:=true
+```
+
+### 4. Connect Foxglove Desktop
+
+- Open Foxglove Desktop on Mac
+- Click **Open connection** → **Rosbridge WebSocket**
+- URL: `ws://localhost:8765`
+- Click **Open**
+
+### 5. Load layout
+
+In Foxglove Desktop: **Layout** → **Import from file** → select
+`/Users/veerdosi/Documents/code/github/meridian_ws/foxglove/meridian_demo.json`
+
+### 6. Watch episodes run
+
+The robot runs 10 episodes automatically. Episode 2 produces a scripted FAILURE (over_force).
+Watch the state panel cycle through: `APPROACH → PRE_CONTACT → CONTACT_ACTIVE → SEATED/FAILURE`.
+
+### 7. Run annotation on episode 2
+
+After the batch completes, find the latest bag:
+```bash
+ls ~/meridian_ws/bags/
+# e.g.: 20240101_120000
+```
+
+Run annotation:
+```bash
+source ~/meridian_ws/install/setup.bash
+python3 ~/meridian_ws/src/meridian_annotation/scripts/annotate_episode.py \
+  --bag ~/meridian_ws/bags/<YYYYMMDD_HHMMSS> \
+  --episode 2
+```
+
+Without `ANTHROPIC_API_KEY` set, this saves `episode_2_ft_trace.png` in the current directory
+and exits cleanly. Set the key to enable the VLM call:
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python3 ~/meridian_ws/src/meridian_annotation/scripts/annotate_episode.py \
+  --bag ~/meridian_ws/bags/<YYYYMMDD_HHMMSS> \
+  --episode 2
+```
+
+---
+
+## Foxglove Layout
+
+The layout file `foxglove/meridian_demo.json` contains a 3-panel layout:
+- **3D panel** (left, large) — robot model following `/joint_states`
+- **Fz plot** (top right) — raw vs filtered insertion force
+- **State text** (bottom right) — current compliance controller state
+
+**To load:** Foxglove Desktop → Layout → Import from file → select `foxglove/meridian_demo.json`.
+
+Additional panels (full wrench, outcome log) can be added manually from the Foxglove panel picker.
+
+---
+
+## Annotation Pipeline
+
+`src/meridian_annotation/scripts/annotate_episode.py` reads a rosbag2 bag and annotates
+a specific episode using the Anthropic VLM.
+
+**Required env var:** `ANTHROPIC_API_KEY` — if absent, the script saves the plot and exits cleanly.
+
+**Usage:**
+```bash
+source ~/meridian_ws/install/setup.bash
+python3 src/meridian_annotation/scripts/annotate_episode.py \
+  --bag ~/meridian_ws/bags/<YYYYMMDD_HHMMSS> \
+  --episode <N>
+```
+
+**Outputs (in current working directory):**
+- `episode_N_ft_trace.png` — Fz trace plot with red abort/seat line
+- `episode_N_annotation.json` — VLM annotation JSON (only if API key is set)
+
+## Replay
+
+To replay any recorded bag into Foxglove Desktop:
+
+```bash
+source ~/meridian_ws/install/setup.bash
+ros2 launch meridian_sim replay.launch.py bag:=~/meridian_ws/bags/20240101_120000
+```
+
+Then connect Foxglove Desktop to `ws://localhost:8765`. The bag plays back in real time with
+clock synchronization (`--clock` flag).
 
 ---
 
@@ -279,6 +408,7 @@ The MuJoCo passive viewer opens on the VNC display for 5 seconds.
 - [x] Step 7 — F/T sensor ROS 2 node (`ft_sensor_node` — noise, Butterworth LPF, 1 kHz)
 - [x] Step 8 — MuJoCo sim node (`mujoco_sim_node` — 1 kHz sim thread, joint states, F/T, reset service)
 - [x] Step 9 — Compliance controller (`compliance_controller` — 5-state machine, Jacobian IK, 7/10 SEATED in 10-episode batch)
+- [x] Step 10 — Foxglove bridge, rosbag2 recording, demo mode, annotation pipeline
 
 ---
 
