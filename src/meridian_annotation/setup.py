@@ -1,4 +1,3 @@
-import os
 from setuptools import setup
 
 package_name = 'meridian_annotation'
