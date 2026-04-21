@@ -250,7 +250,7 @@ To replay any recorded bag into Foxglove Desktop:
 
 ```bash
 source ~/meridian_ws/install/setup.bash
-ros2 launch meridian_sim replay.launch.py bag:=~/meridian_ws/bags/20240101_120000
+ros2 launch meridian_sim replay.launch.py bag:=~/meridian_ws/bags/<YYYYMMDD_HHMMSS>
 ```
 
 Then connect Foxglove Desktop to `ws://localhost:8765`. The bag plays back in real time with
