@@ -1,0 +1,66 @@
+{
+  "configById": {
+    "3d!main": {
+      "cameraState": {
+        "distance": 2.5,
+        "perspective": true,
+        "phi": 1.0,
+        "target": [0.0, 0.0, 0.0],
+        "targetOffset": [0.0, 0.0, 0.0],
+        "thetaOffset": 0.5,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000.0
+      },
+      "followMode": "no-follow",
+      "scene": {},
+      "transforms": {},
+      "topics": {
+        "/joint_states": { "visible": true }
+      },
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/clicked_point"
+      }
+    },
+    "Plot!fz": {
+      "title": "Fz — Raw vs Filtered",
+      "paths": [
+        {
+          "value": "/ft_sensor/raw.wrench.force.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#888888"
+        },
+        {
+          "value": "/ft_sensor/filtered.wrench.force.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#2196F3"
+        }
+      ],
+      "minYValue": -30,
+      "maxYValue": 30,
+      "xAxisVal": "timestamp",
+      "showLegend": true
+    },
+    "RawMessages!state": {
+      "topicPath": "/compliance_controller/state"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": {
+    "direction": "row",
+    "first": "3d!main",
+    "second": {
+      "direction": "column",
+      "first": "Plot!fz",
+      "second": "RawMessages!state",
+      "splitPercentage": 70
+    },
+    "splitPercentage": 60
+  }
+}
