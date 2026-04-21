@@ -49,6 +49,7 @@ class ComplianceController(Node):
         self.declare_parameter('kd_joints', 0.1)
         self.declare_parameter('max_episodes', 10)
         self.declare_parameter('reset_between_episodes', True)
+        self.declare_parameter('demo_mode', False)
 
     def _read_params(self):
         self._target_pos = np.array(
@@ -69,6 +70,11 @@ class ComplianceController(Node):
         self._kd = float(self.get_parameter('kd_joints').value)
         self._max_episodes = int(self.get_parameter('max_episodes').value)
         self._reset_between = bool(self.get_parameter('reset_between_episodes').value)
+        demo_mode_val = self.get_parameter('demo_mode').value
+        if isinstance(demo_mode_val, str):
+            self._demo_mode = demo_mode_val.lower() == 'true'
+        else:
+            self._demo_mode = bool(demo_mode_val)
 
     # --------------------------------------------------------------- init state
 
@@ -97,6 +103,7 @@ class ComplianceController(Node):
         self._episode_count = 0
         self._episodes = []
         self._episode_ending = False
+        self._episode_end_hold_sec = 1.0
         self._episode_end_time = None
         self._all_done = False
 
@@ -156,9 +163,9 @@ class ComplianceController(Node):
         lam = 0.01
         return J.T @ np.linalg.inv(J @ J.T + lam * np.eye(J.shape[0]))
 
-    @staticmethod
-    def _scale_dq(dq: np.ndarray, max_dq: float = 0.02) -> np.ndarray:
-        """Scale joint delta so the largest component is ≤ max_dq, preserving direction."""
+    def _scale_dq(self, dq: np.ndarray, max_dq: float = 0.02) -> np.ndarray:
+        if self._demo_mode:
+            max_dq = max_dq * 0.5
         peak = np.max(np.abs(dq))
         if peak > max_dq:
             return dq * (max_dq / peak)
@@ -185,6 +192,7 @@ class ComplianceController(Node):
             state = self._state
             episode_ending = self._episode_ending
             episode_end_time = self._episode_end_time
+            episode_end_hold_sec = self._episode_end_hold_sec
             contact_z = self._contact_z
 
         J_pinv = self._pinv_dls(J)
@@ -193,7 +201,7 @@ class ComplianceController(Node):
         if episode_ending:
             if state == State.FAILURE:
                 self._do_retract(q, q_dot, J_pinv, site_pos)
-            if episode_end_time is not None and time.time() - episode_end_time >= 1.0:
+            if episode_end_time is not None and time.time() - episode_end_time >= episode_end_hold_sec:
                 with self._lock:
                     self._episode_ending = False
                     self._episode_count += 1
@@ -212,7 +220,12 @@ class ComplianceController(Node):
             total_torque = float(np.sqrt(tx**2 + ty**2 + tz**2))
             with self._lock:
                 self._peak_force = max(self._peak_force, abs(fz))
-            if abs(fz) > self._abort_force:
+            effective_abort = (
+                8.0
+                if (self._demo_mode and self._episode_count == 1)
+                else self._abort_force
+            )
+            if abs(fz) > effective_abort:
                 self._end_episode(State.FAILURE, 'over_force', site_pos)
                 return
             if total_torque > self._abort_torque:
@@ -263,7 +276,7 @@ class ComplianceController(Node):
             last = self._last_pre_contact_tick
             self._last_pre_contact_tick = now
         dt = (now - last) if last is not None else 0.005
-        z_rate = 0.010  # 10 mm/s descent
+        z_rate = 0.005 if self._demo_mode else 0.010
 
         with self._lock:
             if self._pre_contact_z_cmd is None:
@@ -291,6 +304,8 @@ class ComplianceController(Node):
                 self._contact_time = time.time()
                 self._peak_force = abs(fz)
             self.get_logger().info('PRE_CONTACT → CONTACT_ACTIVE')
+            if self._demo_mode:
+                print('[MERIDIAN] Contact detected — compliance controller active')
 
     def _do_contact_active(self, q, q_dot, J_pinv, site_pos, fz):
         # XY: position-controlled (kp_xy * dt scales the error to a per-step delta)
@@ -341,8 +356,17 @@ class ComplianceController(Node):
             peak = self._peak_force
             self._state = outcome
             self._episode_ending = True
+            self._episode_end_hold_sec = (
+                4.0 if (self._demo_mode and outcome == State.SEATED) else 1.0
+            )
             self._episode_end_time = time.time()
             end_time = self._episode_end_time
+
+        if self._demo_mode:
+            if outcome == State.SEATED:
+                print('[MERIDIAN] Insertion complete — seating signature confirmed')
+            elif failure_mode == 'over_force':
+                print('[MERIDIAN] Failure detected — over_force abort, retracting')
 
         duration = (end_time - ep_start) if ep_start else 0.0
         insertion_dist = max(0.0, float(contact_z - site_pos[2])) if contact_z else 0.0
@@ -383,6 +407,8 @@ class ComplianceController(Node):
             self._pre_contact_z_cmd = None
             self._last_pre_contact_tick = None
         self.get_logger().info(f'Starting episode {self._episode_count + 1}')
+        if self._demo_mode:
+            print('[MERIDIAN] Approaching target — vision-guided positioning')
 
     # ─────────────────────────────────────── publish helpers
 
