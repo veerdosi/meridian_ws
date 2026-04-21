@@ -16,6 +16,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -212,7 +214,11 @@ def call_vlm(image_path: str, outcome: str, outcome_msg) -> dict | None:
         }],
     )
 
-    return json.loads(response.content[0].text)
+    try:
+        return json.loads(response.content[0].text)
+    except (json.JSONDecodeError, IndexError, AttributeError) as e:
+        print(f'[MERIDIAN] Failed to parse VLM response: {e}')
+        return None
 
 
 def main() -> None:
@@ -224,78 +230,81 @@ def main() -> None:
     import rclpy
     rclpy.init(args=[])
 
-    db3_path = find_db3(args.bag)
-    conn = sqlite3.connect(db3_path)
+    exit_code = 0
+    try:
+        db3_path = find_db3(args.bag)
+        conn = sqlite3.connect(db3_path)
 
-    topics_needed = [
-        '/ft_sensor/filtered',
-        '/compliance_controller/state',
-        '/execution_outcome',
-    ]
-    topic_ids = get_topic_ids(conn, topics_needed)
+        topics_needed = [
+            '/ft_sensor/filtered',
+            '/compliance_controller/state',
+            '/execution_outcome',
+        ]
+        topic_ids = get_topic_ids(conn, topics_needed)
 
-    missing = [t for t in topics_needed if t not in topic_ids]
-    if missing:
-        print(f'[MERIDIAN] Missing topics in bag: {missing}')
-        conn.close()
+        missing = [t for t in topics_needed if t not in topic_ids]
+        if missing:
+            print(f'[MERIDIAN] Missing topics in bag: {missing}')
+            conn.close()
+            exit_code = 1
+        else:
+            boundaries = find_episode_boundaries(
+                conn, topic_ids['/compliance_controller/state'], args.episode
+            )
+            if boundaries is None:
+                print(f'[MERIDIAN] Episode {args.episode} not found in bag (bag may not have enough episodes)')
+                conn.close()
+                exit_code = 1
+            else:
+                contact_start_ns, contact_end_ns, final_state = boundaries
+                outcome = 'SUCCESS' if final_state == 'SEATED' else 'FAILURE'
+
+                times, fz_values = extract_fz_trace(
+                    conn, topic_ids['/ft_sensor/filtered'], contact_start_ns, contact_end_ns
+                )
+
+                if len(times) == 0:
+                    print(f'[MERIDIAN] No Fz data found for episode {args.episode}')
+                    conn.close()
+                    exit_code = 1
+                else:
+                    end_time_sec = (contact_end_ns - contact_start_ns) * 1e-9
+
+                    outcome_msg = get_episode_outcome(conn, topic_ids['/execution_outcome'], args.episode)
+                    conn.close()
+
+                    plot_path = f'episode_{args.episode}_ft_trace.png'
+                    render_plot(times, fz_values, end_time_sec, outcome, args.episode, plot_path)
+                    print(f'[MERIDIAN] Saved {plot_path}')
+
+                    print(f'[MERIDIAN] Episode {args.episode}: {outcome}'
+                          + (f' peak={outcome_msg.peak_force:.2f}N' if outcome_msg else ''))
+
+                    annotation = call_vlm(plot_path, outcome, outcome_msg)
+
+                    if annotation is not None:
+                        print('\n[MERIDIAN] VLM Annotation:')
+                        print(json.dumps(annotation, indent=2))
+
+                        output_data = {
+                            'episode': args.episode,
+                            'outcome': outcome,
+                            'peak_force': float(outcome_msg.peak_force) if outcome_msg else None,
+                            'insertion_distance': float(outcome_msg.insertion_distance) if outcome_msg else None,
+                            'duration_sec': float(outcome_msg.duration_sec) if outcome_msg else None,
+                            'failure_mode': outcome_msg.failure_mode if outcome_msg else None,
+                            'annotation': annotation,
+                        }
+
+                        json_path = f'episode_{args.episode}_annotation.json'
+                        with open(json_path, 'w') as f:
+                            json.dump(output_data, f, indent=2)
+                        print(f'[MERIDIAN] Saved {json_path}')
+    finally:
         rclpy.shutdown()
-        sys.exit(1)
 
-    boundaries = find_episode_boundaries(
-        conn, topic_ids['/compliance_controller/state'], args.episode
-    )
-    if boundaries is None:
-        print(f'[MERIDIAN] Episode {args.episode} not found in bag (bag may not have enough episodes)')
-        conn.close()
-        rclpy.shutdown()
-        sys.exit(1)
-
-    contact_start_ns, contact_end_ns, final_state = boundaries
-    outcome = 'SUCCESS' if final_state == 'SEATED' else 'FAILURE'
-
-    times, fz_values = extract_fz_trace(
-        conn, topic_ids['/ft_sensor/filtered'], contact_start_ns, contact_end_ns
-    )
-
-    if len(times) == 0:
-        print(f'[MERIDIAN] No Fz data found for episode {args.episode}')
-        conn.close()
-        rclpy.shutdown()
-        sys.exit(1)
-
-    end_time_sec = (contact_end_ns - contact_start_ns) * 1e-9
-
-    outcome_msg = get_episode_outcome(conn, topic_ids['/execution_outcome'], args.episode)
-    conn.close()
-    rclpy.shutdown()
-
-    plot_path = f'episode_{args.episode}_ft_trace.png'
-    render_plot(times, fz_values, end_time_sec, outcome, args.episode, plot_path)
-    print(f'[MERIDIAN] Saved {plot_path}')
-
-    print(f'[MERIDIAN] Episode {args.episode}: {outcome}'
-          + (f' peak={outcome_msg.peak_force:.2f}N' if outcome_msg else ''))
-
-    annotation = call_vlm(plot_path, outcome, outcome_msg)
-
-    if annotation is not None:
-        print('\n[MERIDIAN] VLM Annotation:')
-        print(json.dumps(annotation, indent=2))
-
-        output_data = {
-            'episode': args.episode,
-            'outcome': outcome,
-            'peak_force': float(outcome_msg.peak_force) if outcome_msg else None,
-            'insertion_distance': float(outcome_msg.insertion_distance) if outcome_msg else None,
-            'duration_sec': float(outcome_msg.duration_sec) if outcome_msg else None,
-            'failure_mode': outcome_msg.failure_mode if outcome_msg else None,
-            'annotation': annotation,
-        }
-
-        json_path = f'episode_{args.episode}_annotation.json'
-        with open(json_path, 'w') as f:
-            json.dump(output_data, f, indent=2)
-        print(f'[MERIDIAN] Saved {json_path}')
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 if __name__ == '__main__':
